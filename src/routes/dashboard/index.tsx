@@ -13,7 +13,7 @@ import {
   LoadingSpinner,
   PageHeader,
 } from '../../shared/components'
-import { useAllVocabularies } from '../../features/vocab'
+import { useVocabStats, useVocabularies } from '../../features/vocab'
 import type { Vocabulary } from '../../features/vocab'
 
 export const Route = createFileRoute('/dashboard/')({
@@ -21,14 +21,19 @@ export const Route = createFileRoute('/dashboard/')({
 })
 
 function DashboardHome() {
-  const { data, isLoading } = useAllVocabularies()
+  // Use stats hook for counts
+  const { data: statsData, isLoading: isLoadingStats } = useVocabStats()
+  // Use vocabularies hook for recent vocabs and test stats (fetch first page, sorted by created_at)
+  const { data: vocabsData, isLoading: isLoadingVocabs } = useVocabularies({ 
+    page: 1, 
+    pageSize: 100 // Get enough for stats calculation
+  })
 
-  const vocabularies = data?.data?.data || []
+  const isLoading = isLoadingStats || isLoadingVocabs
+  const stats = statsData?.data
+  const vocabularies = vocabsData?.data?.data || []
   
-  // Calculate stats
-  const totalVocabs = vocabularies.length
-  const memorizedVocabs = vocabularies.filter((v: Vocabulary) => v.status === 'memorized').length
-  const learningVocabs = vocabularies.filter((v: Vocabulary) => v.status === 'learning').length
+  // Calculate test stats from vocabularies
   const totalTests = vocabularies.reduce((sum: number, v: Vocabulary) => sum + v.test_count, 0)
   const passedTests = vocabularies.reduce((sum: number, v: Vocabulary) => sum + v.passed_test_count, 0)
   const failedTests = vocabularies.reduce((sum: number, v: Vocabulary) => sum + v.failed_test_count, 0)
@@ -49,24 +54,24 @@ function DashboardHome() {
     .sort((a: Vocabulary, b: Vocabulary) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     .slice(0, 5)
 
-  const stats = [
+  const statCards = [
     {
       label: 'Total Vocabularies',
-      value: totalVocabs,
+      value: stats?.total || 0,
       icon: BookOpen,
       color: 'text-cyan-400',
       bg: 'bg-cyan-400/10',
     },
     {
       label: 'Memorized',
-      value: memorizedVocabs,
+      value: stats?.memorized || 0,
       icon: CheckCircle,
       color: 'text-green-400',
       bg: 'bg-green-400/10',
     },
     {
       label: 'Learning',
-      value: learningVocabs,
+      value: stats?.learning || 0,
       icon: Brain,
       color: 'text-yellow-400',
       bg: 'bg-yellow-400/10',
@@ -113,7 +118,7 @@ function DashboardHome() {
 
       {/* Main Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
-        {stats.map((stat) => (
+        {statCards.map((stat) => (
           <Card key={stat.label}>
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
               <div className={`p-2 sm:p-3 rounded-lg ${stat.bg} w-fit`}>

@@ -1,12 +1,7 @@
 import { createFileRoute, useSearch } from '@tanstack/react-router'
-import { useState } from 'react'
-import {
-  BookOpen,
-  Edit,
-  Plus,
-  Trash2,
-  X,
-} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { parseAsInteger, parseAsString, useQueryState } from 'nuqs'
+import { BookOpen, Edit, Filter, Plus, Trash2, X } from 'lucide-react'
 import {
   Button,
   Card,
@@ -23,9 +18,15 @@ import {
   useCreateVocab,
   useDeleteVocab,
   useUpdateVocab,
+  useVocabStats,
   useVocabularies,
 } from '../../features/vocab'
-import type { CreateVocabRequest, UpdateVocabRequest, Vocabulary } from '../../features/vocab'
+import type {
+  CreateVocabRequest,
+  UpdateVocabRequest,
+  Vocabulary,
+  VocabularyStatus,
+} from '../../features/vocab'
 
 type SearchParams = {
   action?: string
@@ -42,26 +43,50 @@ export const Route = createFileRoute('/dashboard/vocabularies')({
 
 function VocabulariesPage() {
   const search = useSearch({ from: '/dashboard/vocabularies' })
-  const [page, setPage] = useState(1)
-  const [searchQuery, setSearchQuery] = useState('')
+
+  // URL state management with nuqs
+  const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1))
+  const [searchQuery, setSearchQuery] = useQueryState('search', parseAsString.withDefault(''))
+  const [statusFilter, setStatusFilter] = useQueryState('status', parseAsString.withDefault(''))
+
+  // Local state
   const [showAddModal, setShowAddModal] = useState(search.action === 'add')
   const [editingVocab, setEditingVocab] = useState<Vocabulary | null>(null)
-  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [showFilters, setShowFilters] = useState(false)
 
-  const { data, isLoading } = useVocabularies(page, 10)
+  // Debounced search
+  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery)
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
+
+  // Reset to page 1 when search or filter changes
+  useEffect(() => {
+    if (page !== 1) {
+      setPage(1)
+    }
+  }, [debouncedSearch, statusFilter])
+
+  const { data, isLoading } = useVocabularies({
+    page,
+    pageSize: 10,
+    search: debouncedSearch,
+    status: statusFilter as VocabularyStatus | 'all' | '',
+  })
+  const { data: statsData } = useVocabStats()
   const createVocab = useCreateVocab()
   const updateVocab = useUpdateVocab()
   const deleteVocab = useDeleteVocab()
 
   const vocabularies = data?.data?.data || []
   const totalPages = data?.data?.total_pages || 1
-
-  // Filter vocabularies by search query
-  const filteredVocabs = vocabularies.filter((vocab: Vocabulary) =>
-    vocab.word.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (vocab.definition && vocab.definition.toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (vocab.translation && vocab.translation.toLowerCase().includes(searchQuery.toLowerCase()))
-  )
+  const total = data?.data?.total || 0
+  const stats = statsData?.data
 
   const handleCreate = (formData: CreateVocabRequest) => {
     createVocab.mutate(formData, {
@@ -71,24 +96,32 @@ function VocabulariesPage() {
     })
   }
 
-  const handleUpdate = (id: number, formData: UpdateVocabRequest) => {
+  const handleUpdate = (id: string, formData: UpdateVocabRequest) => {
     updateVocab.mutate(
       { id, data: formData },
       {
         onSuccess: () => {
           setEditingVocab(null)
         },
-      }
+      },
     )
   }
 
-  const handleDelete = (id: number) => {
+  const handleDelete = (id: string) => {
     deleteVocab.mutate(id, {
       onSuccess: () => {
         setDeleteConfirm(null)
       },
     })
   }
+
+  const handleClearFilters = () => {
+    setSearchQuery('')
+    setStatusFilter('')
+    setPage(1)
+  }
+
+  const hasActiveFilters = searchQuery || statusFilter
 
   return (
     <div className="space-y-6">
@@ -103,26 +136,95 @@ function VocabulariesPage() {
         }
       />
 
-      <SearchInput
-        value={searchQuery}
-        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
-        placeholder="Search vocabularies..."
-      />
+      {/* Stats Cards */}
+      {stats && (
+        <div className="grid grid-cols-3 gap-4">
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <div className="text-2xl font-bold text-white">{stats.total}</div>
+            <div className="text-sm text-gray-400">Total Words</div>
+          </div>
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <div className="text-2xl font-bold text-yellow-400">{stats.learning}</div>
+            <div className="text-sm text-gray-400">Learning</div>
+          </div>
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <div className="text-2xl font-bold text-green-400">{stats.memorized}</div>
+            <div className="text-sm text-gray-400">Memorized</div>
+          </div>
+        </div>
+      )}
+
+      {/* Search and Filters */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="flex-1">
+          <SearchInput
+            value={searchQuery}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
+            placeholder="Search vocabularies..."
+          />
+        </div>
+        <Button
+          variant="secondary"
+          onClick={() => setShowFilters(!showFilters)}
+          className={showFilters ? 'bg-slate-600' : ''}
+        >
+          <Filter className="w-4 h-4" />
+          <span className="hidden sm:inline">Filters</span>
+          {hasActiveFilters && <span className="w-2 h-2 bg-cyan-500 rounded-full" />}
+        </Button>
+      </div>
+
+      {/* Filter Panel */}
+      {showFilters && (
+        <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-300 mb-2">Status</label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-cyan-500"
+              >
+                <option value="">All Status</option>
+                <option value="learning">Learning</option>
+                <option value="memorized">Memorized</option>
+              </select>
+            </div>
+            {hasActiveFilters && (
+              <Button variant="ghost" onClick={handleClearFilters} className="self-end">
+                <X className="w-4 h-4" />
+                Clear Filters
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Results Info */}
+      {(searchQuery || statusFilter) && (
+        <div className="text-sm text-gray-400">
+          Showing {total} result{total !== 1 ? 's' : ''}
+          {searchQuery && ` for "${searchQuery}"`}
+          {statusFilter && ` in ${statusFilter}`}
+        </div>
+      )}
 
       {/* Vocabularies List */}
       {isLoading ? (
         <div className="flex items-center justify-center h-64">
           <LoadingSpinner size="lg" />
         </div>
-      ) : filteredVocabs.length > 0 ? (
+      ) : vocabularies.length > 0 ? (
         <>
           <div className="grid gap-4">
-            {filteredVocabs.map((vocab: Vocabulary) => (
+            {vocabularies.map((vocab: Vocabulary) => (
               <Card key={vocab.id} className="hover:border-slate-600 transition-colors">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-2">
-                      <h3 className="text-lg sm:text-xl font-semibold text-white wrap-break-word">{vocab.word}</h3>
+                      <h3 className="text-lg sm:text-xl font-semibold text-white wrap-break-word">
+                        {vocab.word}
+                      </h3>
                       <span
                         className={`px-2 sm:px-3 py-1 rounded-full text-xs font-medium shrink-0 ${
                           vocab.status === 'memorized'
@@ -134,17 +236,23 @@ function VocabulariesPage() {
                       </span>
                     </div>
                     {vocab.translation && (
-                      <p className="text-cyan-400 mb-2 text-sm sm:text-base wrap-break-word">{vocab.translation}</p>
+                      <p className="text-cyan-400 mb-2 text-sm sm:text-base wrap-break-word">
+                        {vocab.translation}
+                      </p>
                     )}
                     {vocab.definition && (
-                      <p className="text-gray-300 mb-2 text-sm sm:text-base wrap-break-word">{vocab.definition}</p>
+                      <p className="text-gray-300 mb-2 text-sm sm:text-base wrap-break-word">
+                        {vocab.definition}
+                      </p>
                     )}
-                    {vocab.example?.length > 0 && (
+                    {vocab.example && vocab.example.length > 0 && (
                       <div className="mt-3">
                         <p className="text-gray-500 text-xs sm:text-sm mb-1">Examples:</p>
                         <ul className="list-disc list-inside text-gray-400 text-xs sm:text-sm">
                           {vocab.example.map((ex, idx) => (
-                            <li key={idx} className="wrap-break-word">{ex}</li>
+                            <li key={idx} className="wrap-break-word">
+                              {ex}
+                            </li>
                           ))}
                         </ul>
                       </div>
@@ -174,19 +282,21 @@ function VocabulariesPage() {
             ))}
           </div>
 
-          <Pagination
-            page={page}
-            totalPages={totalPages}
-            onPageChange={setPage}
-          />
+          <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
         </>
       ) : (
         <EmptyState
           icon={BookOpen}
           title="No vocabularies found"
-          description={searchQuery ? 'Try a different search term' : 'Start building your vocabulary collection'}
+          description={
+            hasActiveFilters
+              ? 'Try adjusting your search or filters'
+              : 'Start building your vocabulary collection'
+          }
           action={
-            !searchQuery && (
+            hasActiveFilters ? (
+              <Button onClick={handleClearFilters}>Clear Filters</Button>
+            ) : (
               <Button onClick={() => setShowAddModal(true)}>
                 <Plus className="w-5 h-5" />
                 Add your first word
@@ -249,8 +359,8 @@ function VocabModal({ vocab, onClose, onSubmit, isLoading }: VocabModalProps) {
     e.preventDefault()
     onSubmit({
       word,
-      definition: definition || undefined,
-      translation: translation || undefined,
+      definition,
+      translation,
       example: examples.length > 0 ? examples : undefined,
     })
   }
@@ -267,11 +377,7 @@ function VocabModal({ vocab, onClose, onSubmit, isLoading }: VocabModalProps) {
   }
 
   return (
-    <Modal
-      isOpen
-      onClose={onClose}
-      title={vocab ? 'Edit Vocabulary' : 'Add New Vocabulary'}
-    >
+    <Modal isOpen onClose={onClose} title={vocab ? 'Edit Vocabulary' : 'Add New Vocabulary'}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <Input
           label="Word"
@@ -291,9 +397,7 @@ function VocabModal({ vocab, onClose, onSubmit, isLoading }: VocabModalProps) {
         />
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">
-            Definition
-          </label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Definition</label>
           <textarea
             value={definition}
             onChange={(e) => setDefinition(e.target.value)}
@@ -304,9 +408,7 @@ function VocabModal({ vocab, onClose, onSubmit, isLoading }: VocabModalProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1">
-            Examples
-          </label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Examples</label>
           <div className="flex gap-2 mb-2">
             <input
               type="text"
@@ -314,7 +416,7 @@ function VocabModal({ vocab, onClose, onSubmit, isLoading }: VocabModalProps) {
               onChange={(e) => setNewExample(e.target.value)}
               className="flex-1 px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-cyan-500"
               placeholder="Add an example sentence"
-              onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addExample())}
+              onKeyUp={(e) => e.key === 'Enter' && (e.preventDefault(), addExample())}
             />
             <Button type="button" variant="secondary" onClick={addExample}>
               Add
